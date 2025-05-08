@@ -16,6 +16,8 @@
 @implementation SettingsViewController {
     NSInteger _bitrate;
     NSInteger _lastSelectedResolutionIndex;
+    NSInteger _customFramerate;
+    NSInteger _lastSelectedFramerateIndex;
 }
 
 @dynamic overrideUserInterfaceStyle;
@@ -129,6 +131,9 @@ BOOL isCustomResolution(CGSize res) {
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    _customFramerate = 0;
+    _lastSelectedFramerateIndex = 0;
+
     // Always run settings in dark mode because we want the light fonts
     if (@available(iOS 13.0, tvOS 13.0, *)) {
         self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
@@ -166,19 +171,30 @@ BOOL isCustomResolution(CGSize res) {
     }
     
     NSInteger framerate;
-    switch ([currentSettings.framerate integerValue]) {
+    switch ([currentSettings.framerate intValue]) {
         case 30:
             framerate = 0;
             break;
-        default:
         case 60:
             framerate = 1;
             break;
         case 120:
             framerate = 2;
             break;
+        default:
+            framerate = 3;
+            _customFramerate = [currentSettings.framerate intValue];
+            break;
     }
-
+    // Add 'Custom' FPS segment if not already present
+    if (self.framerateSelector.numberOfSegments < 4) {
+        [self.framerateSelector insertSegmentWithTitle:@"Custom" atIndex:3 animated:NO];
+    }
+    if (_customFramerate > 0) {
+        [self.framerateSelector setTitle:[NSString stringWithFormat:@"Custom (%ld)", (long)_customFramerate] forSegmentAtIndex:3];
+    } else {
+        [self.framerateSelector setTitle:@"Custom" forSegmentAtIndex:3];
+    }
     NSInteger resolution = 1;
     for (int i = 0; i < RESOLUTION_TABLE_SIZE; i++) {
         if ((int) resolutionTable[i].height == [currentSettings.height intValue]
@@ -254,7 +270,8 @@ BOOL isCustomResolution(CGSize res) {
     [self.resolutionSelector setSelectedSegmentIndex:resolution];
     [self.resolutionSelector addTarget:self action:@selector(newResolutionChosen) forControlEvents:UIControlEventValueChanged];
     [self.framerateSelector setSelectedSegmentIndex:framerate];
-    [self.framerateSelector addTarget:self action:@selector(updateBitrate) forControlEvents:UIControlEventValueChanged];
+    _lastSelectedFramerateIndex = framerate;
+    [self.framerateSelector addTarget:self action:@selector(newFramerateChosen) forControlEvents:UIControlEventValueChanged];
     [self.onscreenControlSelector setSelectedSegmentIndex:onscreenControls];
     [self.onscreenControlSelector setEnabled:!currentSettings.absoluteTouchMode];
     [self.bitrateSlider setMinimumValue:0];
@@ -475,9 +492,55 @@ BOOL isCustomResolution(CGSize res) {
             return 60;
         case 2:
             return 120;
+        case 3:
+            return _customFramerate > 0 ? _customFramerate : 60; // fallback to 60 if not set
         default:
             abort();
     }
+}
+
+- (void)newFramerateChosen {
+    BOOL lastSegmentSelected = [self.framerateSelector selectedSegmentIndex] + 1 == [self.framerateSelector numberOfSegments];
+    if (lastSegmentSelected) {
+        [self promptCustomFramerateDialog];
+    } else {
+        [self updateBitrate];
+        _lastSelectedFramerateIndex = [self.framerateSelector selectedSegmentIndex];
+    }
+}
+
+- (void)promptCustomFramerateDialog {
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"Enter Custom FPS" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"FPS";
+        textField.clearButtonMode = UITextFieldViewModeAlways;
+        textField.borderStyle = UITextBorderStyleRoundedRect;
+        textField.keyboardType = UIKeyboardTypeNumberPad;
+        if (_customFramerate > 0) {
+            textField.text = [NSString stringWithFormat:@"%ld", (long)_customFramerate];
+        } else {
+            textField.text = @"";
+        }
+    }];
+    [alertController addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSArray * textfields = alertController.textFields;
+        UITextField *fpsField = textfields[0];
+        NSInteger fps = [fpsField.text integerValue];
+        if (fps < 1 || fps > 240) {
+            // Restore the previous selection
+            [self.framerateSelector setSelectedSegmentIndex:_lastSelectedFramerateIndex];
+            return;
+        }
+        _customFramerate = fps;
+        [self.framerateSelector setTitle:[NSString stringWithFormat:@"Custom (%ld)", (long)fps] forSegmentAtIndex:3];
+        [self updateBitrate];
+        _lastSelectedFramerateIndex = [self.framerateSelector selectedSegmentIndex];
+    }]];
+    [alertController addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        // Restore the previous selection
+        [self.framerateSelector setSelectedSegmentIndex:_lastSelectedFramerateIndex];
+    }]];
+    [self presentViewController:alertController animated:YES completion:nil];
 }
 
 - (uint32_t) getChosenCodecPreference {
